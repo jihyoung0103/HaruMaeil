@@ -1,4 +1,5 @@
 mod google;
+mod holiday;
 
 use std::{fs, path::PathBuf};
 
@@ -20,6 +21,38 @@ CREATE TABLE IF NOT EXISTS items (
   source TEXT NOT NULL DEFAULT 'local'
 );
 CREATE INDEX IF NOT EXISTS items_at ON items(at);
+";
+
+/// v2: 항목마다 어느 캘린더(구글 캘린더 하나, 할 일 목록 하나, 공휴일, 내 일정)에 속하는지.
+/// 색·이름은 캘린더에 둔다. 날짜 없는 항목(마감 없는 할 일)을 담을 수 있게 at을 NULL 허용.
+/// source 컬럼은 calendar_id가 대신하므로 테이블을 다시 만든다 — SQLite는 컬럼 삭제·제약 변경이 안 된다.
+/// 구글 항목은 원격의 캐시라 버리고 다음 가져오기 때 다시 받는다. 직접 만든 것만 옮긴다.
+/// 이 SQL도 적용된 뒤에는 체크섬 때문에 고치지 말고 v3를 추가할 것.
+const SCHEMA_V2: &str = "
+CREATE TABLE calendars (
+  id    TEXT PRIMARY KEY,
+  name  TEXT NOT NULL,
+  color TEXT NOT NULL
+);
+INSERT INTO calendars (id, name, color) VALUES ('local', '내 일정', '#4a86e8');
+
+CREATE TABLE items_v2 (
+  id          TEXT PRIMARY KEY,
+  calendar_id TEXT NOT NULL REFERENCES calendars(id) ON DELETE CASCADE,
+  title       TEXT NOT NULL,
+  kind        TEXT NOT NULL,
+  at          INTEGER,
+  end_at      INTEGER,
+  done        INTEGER NOT NULL DEFAULT 0
+);
+
+INSERT INTO items_v2 (id, calendar_id, title, kind, at, end_at, done)
+  SELECT id, 'local', title, kind, at, end_at, done FROM items WHERE source = 'local';
+
+DROP TABLE items;
+ALTER TABLE items_v2 RENAME TO items;
+CREATE INDEX items_at ON items(at);
+CREATE INDEX items_calendar ON items(calendar_id);
 ";
 
 /// 위젯 위치·크기. 위치는 화면 좌표(모니터 배치 기준)로 저장한다.
@@ -130,12 +163,20 @@ pub fn run() {
             tauri_plugin_sql::Builder::default()
                 .add_migrations(
                     "sqlite:harumaeil.db",
-                    vec![Migration {
-                        version: 1,
-                        description: "items",
-                        sql: SCHEMA,
-                        kind: MigrationKind::Up,
-                    }],
+                    vec![
+                        Migration {
+                            version: 1,
+                            description: "items",
+                            sql: SCHEMA,
+                            kind: MigrationKind::Up,
+                        },
+                        Migration {
+                            version: 2,
+                            description: "calendars",
+                            sql: SCHEMA_V2,
+                            kind: MigrationKind::Up,
+                        },
+                    ],
                 )
                 .build(),
         )
@@ -146,7 +187,8 @@ pub fn run() {
             google::google_connect,
             google::google_disconnect,
             google::google_events,
-            google::google_tasks
+            google::google_tasks,
+            holiday::holidays
         ])
         .setup(|app| {
             if let Some(widget) = app.get_webview_window("widget") {

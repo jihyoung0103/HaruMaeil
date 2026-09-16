@@ -28,7 +28,17 @@ fn emit_google_credentials() {
     println!("cargo:rustc-env=GOOGLE_CLIENT_SECRET={}", get("client_secret"));
 }
 
+/// 공공데이터포털 서비스 키. src-tauri/holiday-api-key.txt 에 키 문자열만 넣는다.
+fn emit_holiday_key() {
+    println!("cargo:rerun-if-changed=holiday-api-key.txt");
+    let key = fs::read_to_string("holiday-api-key.txt").unwrap_or_default();
+    // 메모장이 BOM을 붙여 저장해도 키가 깨지지 않게. trim()은 BOM을 안 지운다
+    let key = key.trim_start_matches('\u{feff}').trim();
+    println!("cargo:rustc-env=HOLIDAY_API_KEY={key}");
+}
+
 fn main() {
     emit_google_credentials();
+    emit_holiday_key();
     tauri_build::build()
 }

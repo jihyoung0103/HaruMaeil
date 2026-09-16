@@ -293,11 +293,53 @@ struct Paged<T> {
     next_page_token: Option<String>,
 }
 
-/// time_min~time_max 구간의 일정. 반복 일정은 펼쳐서(singleEvents) 받는다.
+#[derive(Deserialize)]
+struct GCalendarListEntry {
+    id: String,
+    summary: Option<String>,
+    #[serde(rename = "summaryOverride")]
+    summary_override: Option<String>,
+    #[serde(rename = "backgroundColor")]
+    background_color: Option<String>,
+}
+
+/// 달력에 색·이름을 붙일 단위. 구글 캘린더 하나, 할 일 목록 하나가 각각 하나.
+#[derive(Serialize)]
+pub struct RemoteCalendar {
+    pub id: String,
+    pub name: String,
+    /// 할 일 목록은 구글이 색을 주지 않아서 None — 프런트가 정한다
+    pub color: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct GoogleEvents {
+    pub calendar: RemoteCalendar,
+    pub events: Vec<RemoteEvent>,
+}
+
+/// time_min~time_max 구간의 기본 캘린더 일정. 반복 일정은 펼쳐서(singleEvents) 받는다.
 #[tauri::command]
-pub async fn google_events(time_min: String, time_max: String) -> Result<Vec<RemoteEvent>, String> {
+pub async fn google_events(time_min: String, time_max: String) -> Result<GoogleEvents, String> {
     let token = access_token().await?;
     let http = http()?;
+
+    let entry: GCalendarListEntry = get_json(
+        &http,
+        &token,
+        "https://www.googleapis.com/calendar/v3/users/me/calendarList/primary",
+        &[],
+    )
+    .await?;
+    let calendar = RemoteCalendar {
+        id: format!("gcal:{}", entry.id),
+        name: entry
+            .summary_override
+            .or(entry.summary)
+            .unwrap_or_else(|| "구글 캘린더".to_string()),
+        color: entry.background_color,
+    };
+
     let mut out = Vec::new();
     let mut page: Option<String> = None;
 
@@ -326,7 +368,7 @@ pub async fn google_events(time_min: String, time_max: String) -> Result<Vec<Rem
                 continue;
             };
             out.push(RemoteEvent {
-                id: format!("gcal:{}", e.id),
+                id: format!("{}:{}", calendar.id, e.id),
                 title: e.summary.unwrap_or_else(|| "(제목 없음)".to_string()),
                 start: at,
                 end: e.end.and_then(|t| t.date_time.or(t.date)),
@@ -336,7 +378,10 @@ pub async fn google_events(time_min: String, time_max: String) -> Result<Vec<Rem
 
         page = parsed.next_page_token;
         if page.is_none() {
-            return Ok(out);
+            return Ok(GoogleEvents {
+                calendar,
+                events: out,
+            });
         }
     }
 }
@@ -348,6 +393,7 @@ const TASKLISTS_URL: &str = "https://tasks.googleapis.com/tasks/v1/users/@me/lis
 #[derive(Deserialize)]
 struct GTaskList {
     id: String,
+    title: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -365,6 +411,8 @@ struct GTask {
 #[derive(Serialize, Debug, PartialEq)]
 pub struct RemoteTask {
     pub id: String,
+    /// 소속 할 일 목록의 캘린더 id ("gtask:<목록 id>")
+    pub list: String,
     pub title: String,
     /// YYYY-MM-DD. 날짜만 넘겨야 시간대 때문에 하루 밀리지 않는다
     pub due: String,
@@ -384,16 +432,23 @@ fn to_remote_task(list_id: &str, t: GTask) -> Option<RemoteTask> {
     Some(RemoteTask {
         // 할 일 id는 목록 안에서만 유일하다고 보장되므로 목록 id를 붙인다
         id: format!("gtask:{list_id}:{}", t.id),
+        list: format!("gtask:{list_id}"),
         title,
         due,
         done: t.status.as_deref() == Some("completed"),
     })
 }
 
+#[derive(Serialize)]
+pub struct GoogleTasks {
+    pub lists: Vec<RemoteCalendar>,
+    pub tasks: Vec<RemoteTask>,
+}
+
 /// 모든 할 일 목록에서 마감일이 due_min 이상 due_max 미만인 할 일.
 /// 완료된 것도 가져온다(달력에 지운 줄로 보이게). 마감 없는 할 일은 달력에 둘 곳이 없어 뺀다.
 #[tauri::command]
-pub async fn google_tasks(due_min: String, due_max: String) -> Result<Vec<RemoteTask>, String> {
+pub async fn google_tasks(due_min: String, due_max: String) -> Result<GoogleTasks, String> {
     let token = access_token().await?;
     let http = http()?;
 
@@ -413,7 +468,7 @@ pub async fn google_tasks(due_min: String, due_max: String) -> Result<Vec<Remote
     }
 
     let mut out = Vec::new();
-    for list in lists {
+    for list in &lists {
         let url = format!(
             "https://tasks.googleapis.com/tasks/v1/lists/{}/tasks",
             percent_encoding::utf8_percent_encode(&list.id, percent_encoding::NON_ALPHANUMERIC)
@@ -439,7 +494,17 @@ pub async fn google_tasks(due_min: String, due_max: String) -> Result<Vec<Remote
             }
         }
     }
-    Ok(out)
+    Ok(GoogleTasks {
+        lists: lists
+            .into_iter()
+            .map(|l| RemoteCalendar {
+                id: format!("gtask:{}", l.id),
+                name: l.title.unwrap_or_else(|| "할 일".to_string()),
+                color: None,
+            })
+            .collect(),
+        tasks: out,
+    })
 }
 
 #[cfg(test)]
@@ -483,6 +548,7 @@ mod tests {
         let r = super::to_remote_task("L1", t).unwrap();
         assert_eq!(r.due, "2026-09-25");
         assert_eq!(r.id, "gtask:L1:t1");
+        assert_eq!(r.list, "gtask:L1");
         assert!(!r.done);
     }
 

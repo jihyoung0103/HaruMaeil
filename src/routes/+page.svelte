@@ -2,8 +2,17 @@
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import MonthGrid from '$lib/MonthGrid.svelte';
-  import { monthCells, ymd, itemDate, type DayItem } from '$lib/calendar';
+  import {
+    monthCells,
+    coversDay,
+    LOCAL_CALENDAR,
+    HOLIDAY_CALENDAR,
+    type DayItem,
+    type WeekStart
+  } from '$lib/calendar';
   import { listRange, saveItem, deleteItem, ITEMS_CHANGED } from '$lib/db';
+  import { ensureHolidays } from '$lib/holidays';
+  import { prefs, setWeekStart } from '$lib/prefs.svelte';
   import {
     googleStatus,
     googleConnect,
@@ -19,13 +28,16 @@
   let items = $state<DayItem[]>([]);
   let selected = $state<Date | null>(null);
   let error = $state('');
+  let holidayError = $state('');
+
+  // 격자가 그리는 42칸. 주 시작 요일에 따라 앞뒤 하루씩 달라진다
+  const cells = $derived(monthCells(year, month, prefs.weekStart));
 
   let draft = $state('');
   let draftKind = $state<'event' | 'task'>('event');
   let draftTime = $state('');
 
   async function reload() {
-    const cells = monthCells(year, month);
     try {
       items = await listRange(cells[0], cells[41]);
       error = '';
@@ -35,9 +47,12 @@
   }
 
   $effect(() => {
-    year;
-    month;
     reload();
+    // 공휴일은 구글 연결과 상관없이 받는다
+    ensureHolidays(cells[0], cells[41]).then(
+      () => (holidayError = ''),
+      (e) => (holidayError = String(e))
+    );
   });
 
   // 다른 창(위젯)이 쓰거나 내가 쓰거나, 바뀌면 다시 읽는다
@@ -46,15 +61,14 @@
     return () => void un.then((f) => f());
   });
 
-  const dayItems = $derived(
-    selected ? items.filter((i) => ymd(itemDate(i)!) === ymd(selected!)) : []
-  );
+  // 여러 날 일정은 가운데 날짜를 눌러도 나온다
+  const dayItems = $derived(selected ? items.filter((i) => coversDay(i, selected!)) : []);
 
   async function add() {
     if (!selected || !draft.trim()) return;
     const [h, m] = draftTime ? draftTime.split(':').map(Number) : [0, 0];
     const when = new Date(selected.getFullYear(), selected.getMonth(), selected.getDate(), h, m);
-    const base = { id: crypto.randomUUID(), title: draft, source: 'local' };
+    const base = { id: crypto.randomUUID(), title: draft, calendarId: LOCAL_CALENDAR };
     try {
       await saveItem(
         draftKind === 'task'
@@ -120,7 +134,6 @@
   const connect = () =>
     run('연결', async () => {
       await googleConnect();
-      const cells = monthCells(year, month);
       const n = await syncGoogle(cells[0], cells[41]);
       return `연결됐습니다. 일정 ${n.events}건, 할 일 ${n.tasks}건 가져왔습니다.`;
     });
@@ -133,7 +146,6 @@
 
   const sync = () =>
     run('동기화', async () => {
-      const cells = monthCells(year, month);
       const n = await syncGoogle(cells[0], cells[41]);
       return `일정 ${n.events}건, 할 일 ${n.tasks}건 가져왔습니다.`;
     });
@@ -158,6 +170,15 @@
     <h1>{year}년 {month}월</h1>
     <button onclick={() => moveMonth(1)} aria-label="다음 달">›</button>
     <button class="today" onclick={goToday}>오늘</button>
+    <!-- ponytail: 설정 화면(TODO P5)이 생기면 그리로 옮길 것 -->
+    <select
+      value={prefs.weekStart}
+      onchange={(e) => setWeekStart(+e.currentTarget.value as WeekStart)}
+      aria-label="주 시작 요일"
+    >
+      <option value={0}>일요일 시작</option>
+      <option value={1}>월요일 시작</option>
+    </select>
     <button class:editing={editingWidget} onclick={toggleWidgetEdit}>
       {editingWidget ? '위치 저장' : '위젯 위치'}
     </button>
@@ -165,6 +186,7 @@
 
   {#if error}<p class="err">{error}</p>{/if}
   {#if widgetError}<p class="err">위젯: {widgetError}</p>{/if}
+  {#if holidayError}<p class="err">공휴일: {holidayError}</p>{/if}
 
   <details class="google">
     <summary>구글 캘린더 {gs.connected ? '· 연결됨' : gs.hasClientId ? '· 미연결' : '· 설정 필요'}</summary>
@@ -187,7 +209,17 @@
     {#if googleMsg}<p class="hint">{googleMsg}</p>{/if}
   </details>
 
-  <MonthGrid {year} {month} {items} {selected} onDayClick={(d) => (selected = d)} />
+  <!-- 격자는 창 높이 안에 가둔다. 높이가 내용을 따라가면 막대 줄 수 계산이 스스로를 키운다 -->
+  <div class="grid-wrap">
+    <MonthGrid
+      {year}
+      {month}
+      {items}
+      {selected}
+      weekStart={prefs.weekStart}
+      onDayClick={(d) => (selected = d)}
+    />
+  </div>
 
   {#if selected}
     <section class="editor">
@@ -200,17 +232,19 @@
               <input
                 type="checkbox"
                 checked={item.done}
-                disabled={item.source !== 'local'}
+                disabled={item.calendarId !== LOCAL_CALENDAR}
                 onchange={() => toggleDone(item)}
                 aria-label="완료"
               />
             {/if}
             <span class:done={item.done}>{item.title}</span>
-            {#if item.source === 'local'}
+            {#if item.calendarId === LOCAL_CALENDAR}
               <button class="del" onclick={() => remove(item.id)} aria-label="삭제">✕</button>
             {:else}
               <!-- 여기서 지워도 다음 동기화 때 다시 생긴다. 구글 쪽 수정은 양방향(P3)에서 -->
-              <span class="src" title="구글에서 가져온 항목은 아직 여기서 수정할 수 없습니다">구글</span>
+              <span class="src" title="가져온 항목은 아직 여기서 수정할 수 없습니다"
+                >{item.calendarId === HOLIDAY_CALENDAR ? '공휴일' : '구글'}</span
+              >
             {/if}
           </li>
         {:else}
@@ -244,6 +278,17 @@
 
   main {
     padding: 0.75rem;
+    height: 100vh;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+  }
+  .grid-wrap {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    /* 기본 800×600 창에서도 6주가 스크롤 없이 들어가게 */
+    --cell-min: 3.5rem;
   }
 
   header {

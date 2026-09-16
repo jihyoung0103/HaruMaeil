@@ -3,15 +3,17 @@
   import MonthGrid from '$lib/MonthGrid.svelte';
   import { monthCells, type DayItem } from '$lib/calendar';
   import { listRange, ITEMS_CHANGED } from '$lib/db';
+  import { prefs } from '$lib/prefs.svelte';
 
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth() + 1;
 
   let items = $state<DayItem[]>([]);
+  // 주 시작 설정은 메인 창에서 바꾸면 storage 이벤트로 여기도 바뀐다
+  const cells = $derived(monthCells(year, month, prefs.weekStart));
 
   async function reload() {
-    const cells = monthCells(year, month);
     try {
       items = await listRange(cells[0], cells[41]);
     } catch (e) {
@@ -30,7 +32,7 @@
 <div class="widget" data-tauri-drag-region>
   <h1 data-tauri-drag-region>{year}년 {month}월</h1>
   <!-- 격자가 드래그를 먹지 않게. 어차피 위젯은 보기 전용 -->
-  <div class="view-only"><MonthGrid {year} {month} {items} compact /></div>
+  <div class="view-only"><MonthGrid {year} {month} {items} weekStart={prefs.weekStart} compact /></div>
 </div>
 
 <style>

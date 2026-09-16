@@ -46,5 +46,12 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "sql": {
+      "preload": [
+        "sqlite:harumaeil.db"
+      ]
+    }
   }
 }

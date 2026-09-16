@@ -1,10 +1,17 @@
 import { invoke } from '@tauri-apps/api/core';
-import { ymd, type DayItem } from './calendar';
-import { replaceSource } from './db';
+import { ymd, parseWhen, DEFAULT_COLOR, type Calendar, type DayItem } from './calendar';
+import { replaceCalendars } from './db';
 
 export interface GoogleStatus {
   hasClientId: boolean;
   connected: boolean;
+}
+
+interface RemoteCalendar {
+  id: string;
+  name: string;
+  /** 할 일 목록은 구글이 색을 안 준다 */
+  color: string | null;
 }
 
 interface RemoteEvent {
@@ -17,6 +24,7 @@ interface RemoteEvent {
 
 interface RemoteTask {
   id: string;
+  list: string;
   title: string;
   /** YYYY-MM-DD */
   due: string;
@@ -27,58 +35,56 @@ export const googleStatus = () => invoke<GoogleStatus>('google_status');
 export const googleConnect = () => invoke<void>('google_connect');
 export const googleDisconnect = () => invoke<void>('google_disconnect');
 
-/**
- * "2026-09-17"처럼 날짜만 있는 문자열을 new Date()에 그냥 넣으면 UTC 자정으로 읽혀
- * 시간대에 따라 하루 밀린다. 종일 일정은 로컬 자정으로 직접 만든다.
- */
-function parseWhen(s: string): Date {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-  return m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(s);
-}
+/** 구글이 색을 안 주는 할 일 목록용. id로 골라서 목록마다 색이 항상 같게 */
+const TASK_COLORS = ['#8e24aa', '#e67c73', '#f6bf26', '#039be5', '#f4511e', '#7986cb', '#616161'];
+const colorFor = (id: string) =>
+  TASK_COLORS[[...id].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 0) % TASK_COLORS.length];
 
-/**
- * 구글 캘린더 일정과 할 일을 구간만큼 받아 SQLite의 google 항목을 갈아끼운다.
- * 할 일도 지금은 일정과 같은 모양으로 달력에 띄운다.
- */
+/** 구글 캘린더 일정과 할 일을 구간만큼 받아 SQLite의 해당 캘린더들을 갈아끼운다 */
 export async function syncGoogle(from: Date, to: Date): Promise<{ events: number; tasks: number }> {
   const end = new Date(to.getFullYear(), to.getMonth(), to.getDate() + 1);
 
-  const [events, tasks] = await Promise.all([
-    invoke<RemoteEvent[]>('google_events', {
+  const [cal, tasks] = await Promise.all([
+    invoke<{ calendar: RemoteCalendar; events: RemoteEvent[] }>('google_events', {
       timeMin: from.toISOString(),
       timeMax: end.toISOString()
     }),
     // 할 일 마감은 날짜만 의미가 있고 구글은 그걸 UTC 자정으로 저장한다.
     // 로컬 자정을 ISO로 바꿔 넘기면 UTC보다 느린 시간대에서 첫날이 빠지므로 날짜로 경계를 만든다
-    invoke<RemoteTask[]>('google_tasks', {
+    invoke<{ lists: RemoteCalendar[]; tasks: RemoteTask[] }>('google_tasks', {
       dueMin: `${ymd(from)}T00:00:00.000Z`,
       dueMax: `${ymd(end)}T00:00:00.000Z`
     })
   ]);
 
+  const calendars: Calendar[] = [
+    { ...cal.calendar, color: cal.calendar.color ?? DEFAULT_COLOR },
+    ...tasks.lists.map((l) => ({ ...l, color: l.color ?? colorFor(l.id) }))
+  ];
+
   const items: DayItem[] = [
-    ...events.map(
+    ...cal.events.map(
       (r): DayItem => ({
         id: r.id,
         title: r.title,
         kind: 'event',
         start: parseWhen(r.start),
         end: r.end ? parseWhen(r.end) : undefined,
-        source: 'google'
+        calendarId: cal.calendar.id
       })
     ),
-    ...tasks.map(
+    ...tasks.tasks.map(
       (r): DayItem => ({
         id: r.id,
         title: r.title,
         kind: 'task',
         due: parseWhen(r.due),
         done: r.done,
-        source: 'google'
+        calendarId: r.list
       })
     )
   ];
 
-  await replaceSource('google', from, to, items);
-  return { events: events.length, tasks: tasks.length };
+  await replaceCalendars(calendars, from, to, items);
+  return { events: cal.events.length, tasks: tasks.tasks.length };
 }
