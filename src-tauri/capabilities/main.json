@@ -1,7 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-window",
-  "description": "메인 창만. 일정 추가·삭제와 구글 동기화가 DB에 쓴다. 위젯은 보기 전용이라 제외.",
-  "windows": ["main"],
-  "permissions": ["sql:allow-execute"]
+  "description": "메인 창만. 일정 추가·삭제와 구글 동기화가 DB에 쓴다. 기본 타이틀 바를 끄고 헤더에 직접 그린 최소화·최대화·닫기 버튼이 창을 조작한다. 위젯은 보기 전용이라 제외.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "sql:allow-execute",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close"
+  ]
 }

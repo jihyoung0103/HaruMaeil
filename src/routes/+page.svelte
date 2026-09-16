@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
   import MonthGrid from '$lib/MonthGrid.svelte';
   import {
     monthCells,
@@ -130,25 +131,75 @@
     busy = false;
   }
 
+  // 마지막 동기화 — 앱을 다시 켜도 보이게 저장해둔다
+  const LAST_SYNC = 'harumaeil.lastSync';
+  type LastSync = { at: number; events: number; tasks: number };
+  let lastSync = $state<LastSync | null>(
+    (() => {
+      try {
+        return JSON.parse(localStorage.getItem(LAST_SYNC) ?? 'null');
+      } catch {
+        return null;
+      }
+    })()
+  );
+  function recordSync(n: { events: number; tasks: number } | null) {
+    lastSync = n && { at: Date.now(), ...n };
+    clock = Date.now();
+    try {
+      if (lastSync) localStorage.setItem(LAST_SYNC, JSON.stringify(lastSync));
+      else localStorage.removeItem(LAST_SYNC);
+    } catch {
+      // 저장 못 해도 이번 실행에서는 보인다
+    }
+  }
+
+  // "N분 전"이 시간이 지나면 저절로 바뀌게
+  let clock = $state(Date.now());
+  $effect(() => {
+    const t = setInterval(() => (clock = Date.now()), 30_000);
+    return () => clearInterval(t);
+  });
+  const rtf = new Intl.RelativeTimeFormat('ko', { numeric: 'auto' });
+  function ago(at: number) {
+    const s = (clock - at) / 1000;
+    if (s < 60) return '방금';
+    if (s < 3600) return rtf.format(-Math.floor(s / 60), 'minute');
+    if (s < 86400) return rtf.format(-Math.floor(s / 3600), 'hour');
+    return rtf.format(-Math.floor(s / 86400), 'day'); // 어제, 그저께, N일 전
+  }
+
   // 연결 직후 바로 한 번 가져온다. 안 그러면 연결했는데 화면이 그대로라 실패한 줄 안다
   const connect = () =>
     run('연결', async () => {
       await googleConnect();
-      const n = await syncGoogle(cells[0], cells[41]);
-      return `연결됐습니다. 일정 ${n.events}건, 할 일 ${n.tasks}건 가져왔습니다.`;
+      recordSync(await syncGoogle(cells[0], cells[41]));
+      return '';
     });
 
   const disconnect = () =>
     run('해제', async () => {
       await googleDisconnect();
+      recordSync(null);
       return '연결을 해제했습니다.';
     });
 
   const sync = () =>
     run('동기화', async () => {
-      const n = await syncGoogle(cells[0], cells[41]);
-      return `일정 ${n.events}건, 할 일 ${n.tasks}건 가져왔습니다.`;
+      recordSync(await syncGoogle(cells[0], cells[41]));
+      return ''; // 결과는 "마지막 동기화" 줄이 보여준다
     });
+
+  // ---- 창 버튼 ----
+  // 기본 타이틀 바를 껐으니 헤더가 대신한다. 최대화 상태에 따라 □/❐ 아이콘을 바꾼다
+  const appWindow = getCurrentWindow();
+  let maximized = $state(false);
+  $effect(() => {
+    const check = async () => (maximized = await appWindow.isMaximized());
+    check();
+    const un = appWindow.onResized(check);
+    return () => void un.then((f) => f());
+  });
 
   // 위젯은 벽지 레이어에 있어 입력을 못 받는다. 옮기려면 잠깐 떼어내야 함
   let editingWidget = $state(false);
@@ -165,9 +216,11 @@
 </script>
 
 <main>
-  <header>
+  <!-- 헤더가 타이틀 바를 겸한다: 빈 곳을 잡고 창 이동, 더블클릭으로 최대화.
+       Tauri는 속성이 붙은 요소 자체를 잡았을 때만 끌기 때문에 제목에도 따로 붙인다 -->
+  <header data-tauri-drag-region>
     <button onclick={() => moveMonth(-1)} aria-label="이전 달">‹</button>
-    <h1>{year}년 {month}월</h1>
+    <h1 data-tauri-drag-region>{year}년 {month}월</h1>
     <button onclick={() => moveMonth(1)} aria-label="다음 달">›</button>
     <button class="today" onclick={goToday}>오늘</button>
     <!-- ponytail: 설정 화면(TODO P5)이 생기면 그리로 옮길 것 -->
@@ -182,6 +235,15 @@
     <button class:editing={editingWidget} onclick={toggleWidgetEdit}>
       {editingWidget ? '위치 저장' : '위젯 위치'}
     </button>
+
+    <!-- 아이콘은 윈도우가 자기 창 버튼에 쓰는 글꼴 그대로 (Win11 Segoe Fluent Icons, Win10 Segoe MDL2 Assets) -->
+    <div class="caption">
+      <button onclick={() => appWindow.minimize()} aria-label="최소화">&#xE921;</button>
+      <button onclick={() => appWindow.toggleMaximize()} aria-label={maximized ? '이전 크기로' : '최대화'}
+        >{maximized ? '\uE923' : '\uE922'}</button
+      >
+      <button class="close" onclick={() => appWindow.close()} aria-label="닫기">&#xE8BB;</button>
+    </div>
   </header>
 
   {#if error}<p class="err">{error}</p>{/if}
@@ -193,8 +255,8 @@
 
     {#if !gs.hasClientId}
       <p class="hint">
-        이 빌드에 구글 클라이언트 ID가 없습니다. <code>src-tauri/src/google.rs</code>의
-        <code>CLIENT_ID</code>에 값을 넣고 다시 빌드하세요.
+        이 빌드에 구글 자격증명이 없습니다. <code>src-tauri/google-client.json</code>을 넣고
+        <code>npm run tauri dev</code>를 다시 켜세요.
       </p>
     {/if}
 
@@ -206,6 +268,11 @@
       <button onclick={disconnect} disabled={busy || !gs.connected}>연결 해제</button>
     </div>
 
+    {#if lastSync}
+      <p class="hint">
+        마지막 동기화: {ago(lastSync.at)} (일정 {lastSync.events}건, 할 일 {lastSync.tasks}건 완료)
+      </p>
+    {/if}
     {#if googleMsg}<p class="hint">{googleMsg}</p>{/if}
   </details>
 
@@ -295,7 +362,28 @@
     display: flex;
     align-items: center;
     gap: 0.4rem;
-    margin-bottom: 0.5rem;
+    height: 2.75rem;
+    /* 창 맨 위·오른쪽 끝까지 붙여서 창 버튼이 모서리에 오게 */
+    margin: -0.75rem -0.75rem 0.5rem 0;
+    flex-shrink: 0;
+  }
+
+  .caption {
+    display: flex;
+    align-self: stretch;
+    margin-left: 0.4rem;
+  }
+  .caption button {
+    width: 46px;
+    border: 0;
+    border-radius: 0;
+    padding: 0;
+    font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', sans-serif;
+    font-size: 10px;
+  }
+  .caption .close:hover {
+    background: #c42b1c;
+    color: #fff;
   }
 
   h1 {
