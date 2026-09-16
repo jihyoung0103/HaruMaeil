@@ -20,6 +20,8 @@ interface RemoteEvent {
   start: string;
   end: string | null;
   allDay: boolean;
+  /** 일정에 따로 고른 색 */
+  color: string | null;
 }
 
 interface RemoteTask {
@@ -70,7 +72,8 @@ export async function syncGoogle(from: Date, to: Date): Promise<{ events: number
         kind: 'event',
         start: parseWhen(r.start),
         end: r.end ? parseWhen(r.end) : undefined,
-        calendarId: cal.calendar.id
+        calendarId: cal.calendar.id,
+        color: r.color ?? undefined
       })
     ),
     ...tasks.tasks.map(

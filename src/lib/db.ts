@@ -16,11 +16,18 @@ interface Row {
   at: number | null;
   end_at: number | null;
   done: number;
-  color: string;
+  color: string | null;
+  calendar_color: string;
 }
 
 const toItem = (r: Row): DayItem => {
-  const base = { id: r.id, title: r.title, calendarId: r.calendar_id, color: r.color };
+  const base = {
+    id: r.id,
+    title: r.title,
+    calendarId: r.calendar_id,
+    color: r.color ?? undefined,
+    calendarColor: r.calendar_color
+  };
   const at = r.at == null ? undefined : new Date(r.at);
   return r.kind === 'task'
     ? { ...base, kind: 'task', due: at, done: !!r.done }
@@ -43,17 +50,18 @@ export async function listRange(from: Date, to: Date): Promise<DayItem[]> {
   const rows = await (
     await db()
   ).select<Row[]>(
-    `SELECT i.*, c.color FROM items i JOIN calendars c ON c.id = i.calendar_id
+    `SELECT i.*, c.color AS calendar_color FROM items i JOIN calendars c ON c.id = i.calendar_id
      WHERE ${OVERLAPS} ORDER BY at`,
     [hi, lo]
   );
   return rows.map(toItem);
 }
 
-const UPSERT_ITEM = `INSERT INTO items (id, calendar_id, title, kind, at, end_at, done) VALUES ($1,$2,$3,$4,$5,$6,$7)
+const UPSERT_ITEM = `INSERT INTO items (id, calendar_id, title, kind, at, end_at, done, color)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
      ON CONFLICT(id) DO UPDATE SET
        calendar_id=excluded.calendar_id, title=excluded.title, kind=excluded.kind,
-       at=excluded.at, end_at=excluded.end_at, done=excluded.done`;
+       at=excluded.at, end_at=excluded.end_at, done=excluded.done, color=excluded.color`;
 
 async function write(conn: Database, item: DayItem): Promise<void> {
   const at = (item.kind === 'task' ? item.due : item.start)?.getTime();
@@ -67,7 +75,8 @@ async function write(conn: Database, item: DayItem): Promise<void> {
     item.kind,
     at,
     item.end?.getTime() ?? null,
-    item.done ? 1 : 0
+    item.done ? 1 : 0,
+    item.color ?? null
   ]);
 }
 

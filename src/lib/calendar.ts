@@ -12,8 +12,13 @@ export interface DayItem {
   due?: Date;
   done?: boolean;
   calendarId: string;
-  /** 조회할 때 calendars 테이블에서 붙는다 */
+  /** 이 항목에만 지정된 색 (구글에서 일정마다 고른 색). 없으면 calendarColor를 쓴다 */
   color?: string;
+  /**
+   * 조회할 때 calendars 테이블에서 붙는다. color와 따로 두는 이유: 읽은 항목을 다시 저장할 때
+   * (로컬 할 일 체크 등) 캘린더 색이 항목 자기 색으로 박혀버리지 않게
+   */
+  calendarColor?: string;
 }
 
 export interface Calendar {

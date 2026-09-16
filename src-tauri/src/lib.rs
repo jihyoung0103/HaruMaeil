@@ -55,6 +55,9 @@ CREATE INDEX items_at ON items(at);
 CREATE INDEX items_calendar ON items(calendar_id);
 ";
 
+/// v3: 구글에서 일정마다 따로 고른 색. NULL이면 캘린더 색을 쓴다.
+const SCHEMA_V3: &str = "ALTER TABLE items ADD COLUMN color TEXT;";
+
 /// 위젯 위치·크기. 위치는 화면 좌표(모니터 배치 기준)로 저장한다.
 #[derive(Serialize, Deserialize, Clone, Copy)]
 struct WidgetRect {
@@ -174,6 +177,12 @@ pub fn run() {
                             version: 2,
                             description: "calendars",
                             sql: SCHEMA_V2,
+                            kind: MigrationKind::Up,
+                        },
+                        Migration {
+                            version: 3,
+                            description: "item color",
+                            sql: SCHEMA_V3,
                             kind: MigrationKind::Up,
                         },
                     ],

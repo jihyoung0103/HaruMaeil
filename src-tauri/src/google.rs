@@ -262,6 +262,22 @@ struct GEvent {
     status: Option<String>,
     start: Option<GTime>,
     end: Option<GTime>,
+    /// 일정 우클릭으로 색을 고른 경우에만 온다 ("1"~"11")
+    #[serde(rename = "colorId")]
+    color_id: Option<String>,
+}
+
+/// colors.get — colorId → 색. 구글 캘린더 화면 이름으로는 1 라벤더, 2 세이지, 3 포도, 4 플라밍고,
+/// 5 바나나, 6 귤, 7 공작, 8 흑연, 9 블루베리, 10 바질, 11 토마토
+#[derive(Deserialize)]
+struct GColors {
+    #[serde(default)]
+    event: std::collections::HashMap<String, GColor>,
+}
+
+#[derive(Deserialize)]
+struct GColor {
+    background: String,
 }
 
 #[derive(Deserialize)]
@@ -281,6 +297,8 @@ pub struct RemoteEvent {
     pub end: Option<String>,
     #[serde(rename = "allDay")]
     pub all_day: bool,
+    /// 일정에 따로 지정한 색. 없으면 캘린더 색을 쓴다
+    pub color: Option<String>,
 }
 
 /// 구글 목록 응답 공통 모양 (일정, 할 일 목록, 할 일 전부 이 형태로 온다)
@@ -339,6 +357,13 @@ pub async fn google_events(time_min: String, time_max: String) -> Result<GoogleE
             .unwrap_or_else(|| "구글 캘린더".to_string()),
         color: entry.background_color,
     };
+    let palette: GColors = get_json(
+        &http,
+        &token,
+        "https://www.googleapis.com/calendar/v3/colors",
+        &[],
+    )
+    .await?;
 
     let mut out = Vec::new();
     let mut page: Option<String> = None;
@@ -373,6 +398,11 @@ pub async fn google_events(time_min: String, time_max: String) -> Result<GoogleE
                 start: at,
                 end: e.end.and_then(|t| t.date_time.or(t.date)),
                 all_day,
+                color: e
+                    .color_id
+                    .as_ref()
+                    .and_then(|id| palette.event.get(id))
+                    .map(|c| c.background.clone()),
             });
         }
 

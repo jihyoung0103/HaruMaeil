@@ -107,7 +107,7 @@
             class:other={!inMonth(days[b.col]) && !inMonth(days[b.col + b.span - 1])}
             style:grid-column="{b.col + 1} / span {b.span}"
             style:grid-row={b.lane + 2}
-            style:--c={b.item.color ?? DEFAULT_COLOR}
+            style:--c={b.item.color ?? b.item.calendarColor ?? DEFAULT_COLOR}
             title={b.item.title}
             >{#if b.item.start && !b.startsBefore}<b>{hhmm(b.item.start)}</b>{/if}{b.item.title}</span
           >
