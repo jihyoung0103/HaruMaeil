@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "메인 창만. 일정 추가·삭제와 구글 동기화가 DB에 쓴다. 위젯은 보기 전용이라 제외.",
+  "windows": ["main"],
+  "permissions": ["sql:allow-execute"]
+}
