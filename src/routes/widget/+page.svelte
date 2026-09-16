@@ -48,7 +48,6 @@
     grid-template-rows: auto minmax(0, 1fr); /* 0 없으면 격자가 min-content 밑으로 안 줄어듦 */
     padding: 0.5rem;
     box-sizing: border-box;
-    font-family: 'Malgun Gothic', system-ui, sans-serif;
     color: #fff;
     background: rgba(20, 20, 22, 0.45);
     border-radius: 10px;

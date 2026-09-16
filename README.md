@@ -53,6 +53,11 @@ node --experimental-strip-types src/lib/calendar.test.ts
 cd src-tauri && cargo test --lib
 ```
 
+## 글꼴
+
+[Pretendard](https://github.com/orioncactus/pretendard) (가변 글꼴, npm `pretendard`) — SIL Open Font License 1.1.
+앱에 같이 들어가서 설치 안 된 PC에서도 똑같이 보입니다.
+
 ## 데이터 위치
 
 `%APPDATA%\com.jihyo.harumaeil\` — `harumaeil.db`(일정), `widget.json`(위젯 위치).

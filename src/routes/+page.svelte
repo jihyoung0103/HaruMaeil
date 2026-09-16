@@ -337,7 +337,6 @@
 <style>
   :global(:root) {
     color-scheme: light dark;
-    font-family: 'Malgun Gothic', Inter, system-ui, sans-serif;
   }
   :global(body) {
     margin: 0;
