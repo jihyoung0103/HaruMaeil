@@ -1,8 +1,9 @@
-//! 구글 캘린더 연동.
+//! 구글 캘린더·할 일 연동.
 //!
-//! client_id는 비밀이 아니라 앱 식별자다 (OAuth URL에 그대로 실려 나간다). 다른 캘린더
-//! 앱들처럼 앱에 박아둔다 — 설치할 때마다 사용자가 넣을 값이 아니다.
-//! client secret은 안 넣는다: 구글 문서상 loopback + PKCE 조합에서 선택 사항이다.
+//! 자격증명은 앱에 박는다 — 설치할 때마다 사용자가 넣을 값이 아니다.
+//! 데스크톱 앱 유형 클라이언트는 토큰 교환에 client_secret을 요구한다. 구글 문서상 이
+//! 값은 "비밀로 취급되지 않는" 값이고 실제 보호는 PKCE가 한다. 다만 공개 저장소에
+//! 커밋되면 시크릿 스캐닝에 걸리므로 build.rs가 저장소 밖 파일에서 주입한다.
 //! 리프레시 토큰은 OS 자격 증명 저장소(Windows는 자격 증명 관리자)에 둔다.
 
 use std::{
@@ -12,7 +13,7 @@ use std::{
 };
 
 use oauth2::{
-    basic::BasicClient, reqwest, AuthUrl, AuthorizationCode, ClientId, CsrfToken,
+    basic::BasicClient, reqwest, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
     PkceCodeChallenge, RedirectUrl, RefreshToken, Scope, TokenResponse, TokenUrl,
 };
 use serde::{Deserialize, Serialize};
@@ -35,12 +36,18 @@ const KEYRING_USER: &str = "google-refresh-token";
 
 // ---------- client_id ----------
 
-/// 구글 클라우드 콘솔 > 사용자 인증 정보 > OAuth 클라이언트 ID(데스크톱 앱)에서 받은 값.
-/// 여기를 채우면 앱은 그냥 "연결하기" 버튼 하나가 된다.
-const CLIENT_ID: &str = "344606506253-bkifgpp4vbcv7bfkrv9iekrr3thg6n9f.apps.googleusercontent.com";
+/// build.rs가 src-tauri/google-client.json에서 읽어 넣는다 (저장소에는 없는 파일)
+const CLIENT_ID: &str = env!("GOOGLE_CLIENT_ID");
+const CLIENT_SECRET: &str = env!("GOOGLE_CLIENT_SECRET");
 
 fn client_id() -> Option<String> {
     (!CLIENT_ID.is_empty()).then(|| CLIENT_ID.to_string())
+}
+
+/// 데스크톱 클라이언트는 토큰 교환에 시크릿을 요구한다. 없으면 구글이
+/// "client_secret is missing"으로 거절한다.
+fn client_secret() -> Option<ClientSecret> {
+    (!CLIENT_SECRET.is_empty()).then(|| ClientSecret::new(CLIENT_SECRET.to_string()))
 }
 
 #[derive(Serialize)]
@@ -155,12 +162,13 @@ fn http() -> Result<reqwest::Client, String> {
 
 #[tauri::command]
 pub async fn google_connect(app: AppHandle) -> Result<(), String> {
-    let client_id = client_id().ok_or("빌드에 구글 클라이언트 ID가 없습니다 (google.rs의 CLIENT_ID)")?;
+    let client_id = client_id().ok_or("빌드에 구글 자격증명이 없습니다 (src-tauri/google-client.json)")?;
 
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
 
     let client = BasicClient::new(ClientId::new(client_id))
+        .set_client_secret(client_secret().ok_or("빌드에 구글 클라이언트 시크릿이 없습니다")?)
         .set_auth_uri(AuthUrl::new(AUTH_URL.to_string()).map_err(|e| e.to_string())?)
         .set_token_uri(TokenUrl::new(TOKEN_URL.to_string()).map_err(|e| e.to_string())?)
         .set_redirect_uri(
@@ -204,10 +212,11 @@ pub async fn google_connect(app: AppHandle) -> Result<(), String> {
 /// 매번 리프레시로 액세스 토큰을 새로 받는다.
 /// ponytail: 호출마다 왕복 한 번. 동기화가 잦아지면 만료시각까지 메모리에 캐시할 것
 async fn access_token() -> Result<String, String> {
-    let client_id = client_id().ok_or("빌드에 구글 클라이언트 ID가 없습니다 (google.rs의 CLIENT_ID)")?;
+    let client_id = client_id().ok_or("빌드에 구글 자격증명이 없습니다 (src-tauri/google-client.json)")?;
     let refresh = load_refresh().ok_or("구글 계정이 연결되지 않았습니다")?;
 
     let client = BasicClient::new(ClientId::new(client_id))
+        .set_client_secret(client_secret().ok_or("빌드에 구글 클라이언트 시크릿이 없습니다")?)
         .set_auth_uri(AuthUrl::new(AUTH_URL.to_string()).map_err(|e| e.to_string())?)
         .set_token_uri(TokenUrl::new(TOKEN_URL.to_string()).map_err(|e| e.to_string())?);
 
@@ -219,15 +228,32 @@ async fn access_token() -> Result<String, String> {
     Ok(token.access_token().secret().clone())
 }
 
-// ---------- 캘린더 ----------
+// ---------- API 공통 ----------
 
-#[derive(Deserialize)]
-struct EventsResponse {
-    #[serde(default)]
-    items: Vec<GEvent>,
-    #[serde(rename = "nextPageToken")]
-    next_page_token: Option<String>,
+/// 토큰 달고 GET 해서 JSON으로 푼다. 실패하면 구글이 준 본문을 그대로 에러에 싣는다
+/// (API 사용 설정이 꺼져 있다 같은 원인이 거기 적혀 온다).
+async fn get_json<T: serde::de::DeserializeOwned>(
+    http: &reqwest::Client,
+    token: &str,
+    url: &str,
+    query: &[(&str, String)],
+) -> Result<T, String> {
+    let res = http
+        .get(url)
+        .bearer_auth(token)
+        .query(query)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = res.status();
+    let body = res.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("구글 API {status}: {body}"));
+    }
+    serde_json::from_str(&body).map_err(|e| e.to_string())
 }
+
+// ---------- 캘린더 ----------
 
 #[derive(Deserialize)]
 struct GEvent {
@@ -257,6 +283,16 @@ pub struct RemoteEvent {
     pub all_day: bool,
 }
 
+/// 구글 목록 응답 공통 모양 (일정, 할 일 목록, 할 일 전부 이 형태로 온다)
+#[derive(Deserialize)]
+struct Paged<T> {
+    // 그냥 default면 serde가 T: Default를 요구한다. 빈 Vec만 있으면 됨
+    #[serde(default = "Vec::new")]
+    items: Vec<T>,
+    #[serde(rename = "nextPageToken")]
+    next_page_token: Option<String>,
+}
+
 /// time_min~time_max 구간의 일정. 반복 일정은 펼쳐서(singleEvents) 받는다.
 #[tauri::command]
 pub async fn google_events(time_min: String, time_max: String) -> Result<Vec<RemoteEvent>, String> {
@@ -276,22 +312,8 @@ pub async fn google_events(time_min: String, time_max: String) -> Result<Vec<Rem
         if let Some(p) = &page {
             query.push(("pageToken", p.clone()));
         }
+        let parsed: Paged<GEvent> = get_json(&http, &token, EVENTS_URL, &query).await?;
 
-        let res = http
-            .get(EVENTS_URL)
-            .bearer_auth(&token)
-            .query(&query)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let status = res.status();
-        let body = res.text().await.map_err(|e| e.to_string())?;
-        if !status.is_success() {
-            return Err(format!("구글 캘린더 {status}: {body}"));
-        }
-
-        let parsed: EventsResponse = serde_json::from_str(&body).map_err(|e| e.to_string())?;
         for e in parsed.items {
             if e.status.as_deref() == Some("cancelled") {
                 continue;
@@ -317,6 +339,107 @@ pub async fn google_events(time_min: String, time_max: String) -> Result<Vec<Rem
             return Ok(out);
         }
     }
+}
+
+// ---------- 할 일 ----------
+
+const TASKLISTS_URL: &str = "https://tasks.googleapis.com/tasks/v1/users/@me/lists";
+
+#[derive(Deserialize)]
+struct GTaskList {
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct GTask {
+    id: String,
+    title: Option<String>,
+    /// "needsAction" | "completed"
+    status: Option<String>,
+    /// RFC3339 형식이지만 구글 할 일은 날짜만 의미가 있다 (시각 부분은 버려짐)
+    due: Option<String>,
+    #[serde(default)]
+    deleted: bool,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+pub struct RemoteTask {
+    pub id: String,
+    pub title: String,
+    /// YYYY-MM-DD. 날짜만 넘겨야 시간대 때문에 하루 밀리지 않는다
+    pub due: String,
+    pub done: bool,
+}
+
+/// 달력에 놓을 수 없는 것(마감 없음, 삭제됨)은 None
+fn to_remote_task(list_id: &str, t: GTask) -> Option<RemoteTask> {
+    if t.deleted {
+        return None;
+    }
+    let due = t.due?.get(..10)?.to_string();
+    let title = t
+        .title
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "(제목 없음)".to_string());
+    Some(RemoteTask {
+        // 할 일 id는 목록 안에서만 유일하다고 보장되므로 목록 id를 붙인다
+        id: format!("gtask:{list_id}:{}", t.id),
+        title,
+        due,
+        done: t.status.as_deref() == Some("completed"),
+    })
+}
+
+/// 모든 할 일 목록에서 마감일이 due_min 이상 due_max 미만인 할 일.
+/// 완료된 것도 가져온다(달력에 지운 줄로 보이게). 마감 없는 할 일은 달력에 둘 곳이 없어 뺀다.
+#[tauri::command]
+pub async fn google_tasks(due_min: String, due_max: String) -> Result<Vec<RemoteTask>, String> {
+    let token = access_token().await?;
+    let http = http()?;
+
+    let mut lists = Vec::new();
+    let mut page: Option<String> = None;
+    loop {
+        let mut query = vec![("maxResults", "100".to_string())];
+        if let Some(p) = &page {
+            query.push(("pageToken", p.clone()));
+        }
+        let parsed: Paged<GTaskList> = get_json(&http, &token, TASKLISTS_URL, &query).await?;
+        lists.extend(parsed.items);
+        page = parsed.next_page_token;
+        if page.is_none() {
+            break;
+        }
+    }
+
+    let mut out = Vec::new();
+    for list in lists {
+        let url = format!(
+            "https://tasks.googleapis.com/tasks/v1/lists/{}/tasks",
+            percent_encoding::utf8_percent_encode(&list.id, percent_encoding::NON_ALPHANUMERIC)
+        );
+        let mut page: Option<String> = None;
+        loop {
+            let mut query = vec![
+                ("dueMin", due_min.clone()),
+                ("dueMax", due_max.clone()),
+                ("showCompleted", "true".to_string()),
+                // 완료 후 "완료된 항목 지우기"를 하면 hidden이 된다. 이게 없으면 완료 항목이 대부분 빠진다
+                ("showHidden", "true".to_string()),
+                ("maxResults", "100".to_string()),
+            ];
+            if let Some(p) = &page {
+                query.push(("pageToken", p.clone()));
+            }
+            let parsed: Paged<GTask> = get_json(&http, &token, &url, &query).await?;
+            out.extend(parsed.items.into_iter().filter_map(|t| to_remote_task(&list.id, t)));
+            page = parsed.next_page_token;
+            if page.is_none() {
+                break;
+            }
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -348,6 +471,34 @@ mod tests {
     fn wrong_state_is_rejected() {
         let err = redirect("/?state=attacker&code=zzz", "abc").unwrap_err();
         assert!(err.contains("state"), "{err}");
+    }
+
+    fn task(json: &str) -> super::GTask {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn task_due_keeps_date_only() {
+        let t = task(r#"{"id":"t1","title":"월세","status":"needsAction","due":"2026-09-25T00:00:00.000Z"}"#);
+        let r = super::to_remote_task("L1", t).unwrap();
+        assert_eq!(r.due, "2026-09-25");
+        assert_eq!(r.id, "gtask:L1:t1");
+        assert!(!r.done);
+    }
+
+    #[test]
+    fn task_completed_and_untitled() {
+        let t = task(r#"{"id":"t2","title":"  ","status":"completed","due":"2026-09-01T00:00:00.000Z"}"#);
+        let r = super::to_remote_task("L1", t).unwrap();
+        assert!(r.done);
+        assert_eq!(r.title, "(제목 없음)");
+    }
+
+    #[test]
+    fn task_without_due_or_deleted_is_skipped() {
+        assert!(super::to_remote_task("L", task(r#"{"id":"a","title":"x"}"#)).is_none());
+        let deleted = r#"{"id":"b","title":"x","due":"2026-09-01T00:00:00.000Z","deleted":true}"#;
+        assert!(super::to_remote_task("L", task(deleted)).is_none());
     }
 
     #[test]

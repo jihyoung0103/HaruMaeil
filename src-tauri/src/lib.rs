@@ -145,7 +145,8 @@ pub fn run() {
             google::google_status,
             google::google_connect,
             google::google_disconnect,
-            google::google_events
+            google::google_events,
+            google::google_tasks
         ])
         .setup(|app| {
             if let Some(widget) = app.get_webview_window("widget") {

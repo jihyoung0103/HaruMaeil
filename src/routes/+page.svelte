@@ -122,7 +122,7 @@
       await googleConnect();
       const cells = monthCells(year, month);
       const n = await syncGoogle(cells[0], cells[41]);
-      return `연결됐습니다. ${n}건 가져왔습니다.`;
+      return `연결됐습니다. 일정 ${n.events}건, 할 일 ${n.tasks}건 가져왔습니다.`;
     });
 
   const disconnect = () =>
@@ -135,7 +135,7 @@
     run('동기화', async () => {
       const cells = monthCells(year, month);
       const n = await syncGoogle(cells[0], cells[41]);
-      return `${n}건 가져왔습니다.`;
+      return `일정 ${n.events}건, 할 일 ${n.tasks}건 가져왔습니다.`;
     });
 
   // 위젯은 벽지 레이어에 있어 입력을 못 받는다. 옮기려면 잠깐 떼어내야 함
@@ -200,12 +200,18 @@
               <input
                 type="checkbox"
                 checked={item.done}
+                disabled={item.source !== 'local'}
                 onchange={() => toggleDone(item)}
                 aria-label="완료"
               />
             {/if}
             <span class:done={item.done}>{item.title}</span>
-            <button class="del" onclick={() => remove(item.id)} aria-label="삭제">✕</button>
+            {#if item.source === 'local'}
+              <button class="del" onclick={() => remove(item.id)} aria-label="삭제">✕</button>
+            {:else}
+              <!-- 여기서 지워도 다음 동기화 때 다시 생긴다. 구글 쪽 수정은 양방향(P3)에서 -->
+              <span class="src" title="구글에서 가져온 항목은 아직 여기서 수정할 수 없습니다">구글</span>
+            {/if}
           </li>
         {:else}
           <li class="empty">없음</li>
@@ -330,6 +336,10 @@
   }
   .done {
     text-decoration: line-through;
+    opacity: 0.5;
+  }
+  .src {
+    font-size: 0.75rem;
     opacity: 0.5;
   }
   .del {

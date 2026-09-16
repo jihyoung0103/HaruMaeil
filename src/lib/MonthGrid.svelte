@@ -53,7 +53,7 @@
     >
       <span class="num">{date.getDate()}</span>
       {#each day.slice(0, max) as item (item.id)}
-        <span class="item" class:task={item.kind === 'task'} class:done={item.done}
+        <span class="item" class:done={item.done}
           >{#if item.start}<b>{hhmm(item.start)}</b>{/if}{item.title}</span
         >
       {/each}
@@ -150,9 +150,6 @@
   .item b {
     font-weight: 400;
     opacity: 0.75;
-  }
-  .item.task {
-    background: color-mix(in srgb, #2a8 25%, transparent);
   }
   .item.done {
     text-decoration: line-through;
