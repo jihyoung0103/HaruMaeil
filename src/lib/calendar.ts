@@ -11,6 +11,11 @@ export interface DayItem {
   end?: Date;
   due?: Date;
   done?: boolean;
+  /**
+   * 시각 없이 날짜만 있는 항목. 구글 일정은 start.dateTime이 없으면 종일, 구글 할 일은 due가
+   * 00:00:00Z로 와도 날짜만 유효하므로 항상 종일. 자정 시작 여부로 어림하지 말 것
+   */
+  allDay: boolean;
   calendarId: string;
   /** 이 항목에만 지정된 색 (구글에서 일정마다 고른 색). 없으면 calendarColor를 쓴다 */
   color?: string;
@@ -53,6 +58,9 @@ export const monthCells = (year: number, month: number, weekStart: WeekStart = 0
 };
 
 export const itemDate = (i: DayItem) => i.start ?? i.due;
+
+/** 14:00 */
+export const hhmm = (d: Date) => `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
 
 const dayStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 // 반올림: 서머타임이 있는 곳에선 하루가 23·25시간일 수 있다
@@ -135,6 +143,39 @@ export function hiddenPerDay(bars: Bar[], lanes: number): number[] {
   const n = Array(7).fill(0);
   for (const b of bars) if (b.lane >= lanes) for (let c = b.col; c < b.col + b.span; c++) n[c]++;
   return n;
+}
+
+/** 사이드 패널이 위에서 아래로 그리는 묶음 */
+export interface DayGroups {
+  /** 공휴일·기념일 */
+  holidays: DayItem[];
+  /** 종일 일정 */
+  allDay: DayItem[];
+  /** 그날 할 일 전부 — 시각 유무와 상관없이 */
+  tasks: DayItem[];
+  /** 시각 있는 일정 + 시각 있는 할 일, 시작 시각 순 */
+  timed: DayItem[];
+}
+
+/**
+ * 하루치 항목을 묶음별 배열에 나눠 담는다. 한 배열을 정렬로 섞지 않는다 — 정렬하는 건 timed뿐.
+ * 시각 있는 할 일은 tasks와 timed 양쪽에 **같은 객체로** 들어간다(의도적 중복). 복사하지 않으므로
+ * 한쪽에서 완료 처리하면 양쪽이 같이 바뀐다.
+ * 종일 일정의 끝은 다음날 자정이라 coversDay(끝을 포함하지 않음)로 걸러야 하루 밀리지 않는다.
+ */
+export function dayGroups(items: DayItem[], day: Date): DayGroups {
+  const g: DayGroups = { holidays: [], allDay: [], tasks: [], timed: [] };
+  for (const i of items) {
+    if (!coversDay(i, day)) continue;
+    if (i.calendarId === HOLIDAY_CALENDAR) g.holidays.push(i);
+    else if (i.kind === 'task') {
+      g.tasks.push(i);
+      if (!i.allDay) g.timed.push(i);
+    } else if (i.allDay) g.allDay.push(i);
+    else g.timed.push(i);
+  }
+  g.timed.sort((a, b) => itemDate(a)!.getTime() - itemDate(b)!.getTime());
+  return g;
 }
 
 // ponytail: 마감 지난 미완료 할 일도 원래 마감일 칸에 그대로. 규칙은 TODO P2-9와 같이 결정.

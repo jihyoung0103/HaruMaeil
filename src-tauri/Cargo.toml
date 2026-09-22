@@ -27,6 +27,7 @@ tauri-plugin-sql = { version = "2.4.1", features = ["sqlite"] }
 oauth2 = "5.0.0"
 percent-encoding = "2.3.2"
 keyring = "4.2.0"
+tauri-plugin-single-instance = "2.4.5"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

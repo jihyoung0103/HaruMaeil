@@ -3,6 +3,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import MonthGrid from '$lib/MonthGrid.svelte';
+  import DayPanel from '$lib/DayPanel.svelte';
   import {
     monthCells,
     coversDay,
@@ -11,7 +12,8 @@
     type DayItem,
     type WeekStart
   } from '$lib/calendar';
-  import { listRange, saveItem, deleteItem, ITEMS_CHANGED } from '$lib/db';
+  import { saveItem, deleteItem, ITEMS_CHANGED } from '$lib/db';
+  import { itemStore, loadItems } from '$lib/items.svelte';
   import { ensureHolidays } from '$lib/holidays';
   import { prefs, setWeekStart } from '$lib/prefs.svelte';
   import {
@@ -26,7 +28,6 @@
   let year = $state(now.getFullYear());
   let month = $state(now.getMonth() + 1);
 
-  let items = $state<DayItem[]>([]);
   let selected = $state<Date | null>(null);
   let error = $state('');
   let holidayError = $state('');
@@ -38,9 +39,13 @@
   let draftKind = $state<'event' | 'task'>('event');
   let draftTime = $state('');
 
+  // 사이드 패널은 지금 오늘을 보여준다. 다른 달로 넘겨도 오늘 항목이 원본에 남도록 읽는 구간에 오늘을 포함한다
+  // ponytail: 자정을 넘기면 now가 안 바뀐다 — P1-5(15분 타이머)에서 같이 처리
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
   async function reload() {
     try {
-      items = await listRange(cells[0], cells[41]);
+      await loadItems(cells[0] < today ? cells[0] : today, cells[41] > today ? cells[41] : today);
       error = '';
     } catch (e) {
       error = String(e);
@@ -63,13 +68,21 @@
   });
 
   // 여러 날 일정은 가운데 날짜를 눌러도 나온다
-  const dayItems = $derived(selected ? items.filter((i) => coversDay(i, selected!)) : []);
+  const dayItems = $derived(
+    selected ? itemStore.items.filter((i) => coversDay(i, selected!)) : []
+  );
 
   async function add() {
     if (!selected || !draft.trim()) return;
     const [h, m] = draftTime ? draftTime.split(':').map(Number) : [0, 0];
     const when = new Date(selected.getFullYear(), selected.getMonth(), selected.getDate(), h, m);
-    const base = { id: crypto.randomUUID(), title: draft, calendarId: LOCAL_CALENDAR };
+    const base = {
+      id: crypto.randomUUID(),
+      title: draft,
+      calendarId: LOCAL_CALENDAR,
+      // 할 일은 시각 입력칸이 없어서 항상 종일, 일정은 시각을 비우면 종일
+      allDay: draftKind === 'task' || !draftTime
+    };
     try {
       await saveItem(
         draftKind === 'task'
@@ -276,16 +289,22 @@
     {#if googleMsg}<p class="hint">{googleMsg}</p>{/if}
   </details>
 
-  <!-- 격자는 창 높이 안에 가둔다. 높이가 내용을 따라가면 막대 줄 수 계산이 스스로를 키운다 -->
-  <div class="grid-wrap">
-    <MonthGrid
-      {year}
-      {month}
-      {items}
-      {selected}
-      weekStart={prefs.weekStart}
-      onDayClick={(d) => (selected = d)}
-    />
+  <div class="body">
+    <!-- 격자는 창 높이 안에 가둔다. 높이가 내용을 따라가면 막대 줄 수 계산이 스스로를 키운다 -->
+    <div class="grid-wrap">
+      <MonthGrid
+        {year}
+        {month}
+        items={itemStore.items}
+        {selected}
+        weekStart={prefs.weekStart}
+        onDayClick={(d) => (selected = d)}
+      />
+    </div>
+    <!-- 이번 단계는 오늘 고정. 월 격자에서 날짜 누르면 바뀌게 하는 건 다음 단계 -->
+    <div class="panel-wrap">
+      <DayPanel day={today} items={itemStore.items} />
+    </div>
   </div>
 
   {#if selected}
@@ -349,12 +368,24 @@
     display: flex;
     flex-direction: column;
   }
-  .grid-wrap {
+  .body {
     flex: 1;
     min-height: 0;
+    display: flex;
+    gap: 0.75rem;
+  }
+  .grid-wrap {
+    flex: 1;
+    min-width: 0;
     overflow: auto;
     /* 기본 800×600 창에서도 6주가 스크롤 없이 들어가게 */
     --cell-min: 3.5rem;
+  }
+
+  .panel-wrap {
+    width: 15rem;
+    flex-shrink: 0;
+    min-height: 0;
   }
 
   header {

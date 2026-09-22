@@ -5,6 +5,7 @@
     itemDate,
     layoutWeek,
     hiddenPerDay,
+    hhmm,
     HOLIDAY_CALENDAR,
     DEFAULT_COLOR,
     type DayItem,
@@ -47,9 +48,6 @@
   };
 
   const selectedKey = $derived(selected ? ymd(selected) : null);
-  // 자정이면 시각을 안 붙인다 (종일 일정으로 취급)
-  const hhmm = (d: Date) =>
-    d.getHours() || d.getMinutes() ? `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')} ` : '';
 
   const cells = $derived(monthCells(year, month, weekStart));
   const weeks = $derived(Array.from({ length: 6 }, (_, w) => cells.slice(w * 7, w * 7 + 7)));
@@ -109,7 +107,7 @@
             style:grid-row={b.lane + 2}
             style:--c={b.item.color ?? b.item.calendarColor ?? DEFAULT_COLOR}
             title={b.item.title}
-            >{#if b.item.start && !b.startsBefore}<b>{hhmm(b.item.start)}</b>{/if}{b.item.title}</span
+            >{#if b.item.start && !b.item.allDay && !b.startsBefore}<b>{hhmm(b.item.start) + ' '}</b>{/if}{b.item.title}</span
           >
         {/if}
       {/each}

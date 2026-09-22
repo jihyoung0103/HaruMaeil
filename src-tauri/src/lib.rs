@@ -58,6 +58,14 @@ CREATE INDEX items_calendar ON items(calendar_id);
 /// v3: 구글에서 일정마다 따로 고른 색. NULL이면 캘린더 색을 쓴다.
 const SCHEMA_V3: &str = "ALTER TABLE items ADD COLUMN color TEXT;";
 
+/// v4: 종일 여부. 구글은 종일 일정에 start.dateTime 없이 start.date만 준다.
+/// 자정 시작으로 어림하면 00:00에 시작하는 일정을 종일로 잘못 본다.
+/// 할 일(구글 할 일은 날짜만 유효)과 공휴일은 전부 종일. 구글 일정은 다음 가져오기 때 정확해진다.
+const SCHEMA_V4: &str = "
+ALTER TABLE items ADD COLUMN all_day INTEGER NOT NULL DEFAULT 0;
+UPDATE items SET all_day = 1 WHERE kind = 'task' OR calendar_id = 'holiday:kr';
+";
+
 /// 위젯 위치·크기. 위치는 화면 좌표(모니터 배치 기준)로 저장한다.
 #[derive(Serialize, Deserialize, Clone, Copy)]
 struct WidgetRect {
@@ -160,7 +168,25 @@ fn widget_edit(app: AppHandle, on: bool) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default();
+
+    // 두 번 켜지 못하게. 두 번째 실행은 이미 떠 있는 창을 앞으로 보내고 스스로 끝난다.
+    // 개발 빌드에는 걸지 않는다 — 잠금이 앱 식별자 기준이라, 시작프로그램으로 떠 있는
+    // 릴리스 앱 때문에 `npm run tauri dev`가 바로 죽는다.
+    // 이 플러그인은 가장 먼저 등록해야 한다.
+    #[cfg(not(debug_assertions))]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }));
+    }
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_sql::Builder::default()
@@ -183,6 +209,12 @@ pub fn run() {
                             version: 3,
                             description: "item color",
                             sql: SCHEMA_V3,
+                            kind: MigrationKind::Up,
+                        },
+                        Migration {
+                            version: 4,
+                            description: "all day",
+                            sql: SCHEMA_V4,
                             kind: MigrationKind::Up,
                         },
                     ],

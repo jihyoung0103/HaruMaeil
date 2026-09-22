@@ -16,6 +16,7 @@ interface Row {
   at: number | null;
   end_at: number | null;
   done: number;
+  all_day: number;
   color: string | null;
   calendar_color: string;
 }
@@ -25,6 +26,7 @@ const toItem = (r: Row): DayItem => {
     id: r.id,
     title: r.title,
     calendarId: r.calendar_id,
+    allDay: !!r.all_day,
     color: r.color ?? undefined,
     calendarColor: r.calendar_color
   };
@@ -57,11 +59,12 @@ export async function listRange(from: Date, to: Date): Promise<DayItem[]> {
   return rows.map(toItem);
 }
 
-const UPSERT_ITEM = `INSERT INTO items (id, calendar_id, title, kind, at, end_at, done, color)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+const UPSERT_ITEM = `INSERT INTO items (id, calendar_id, title, kind, at, end_at, done, color, all_day)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
      ON CONFLICT(id) DO UPDATE SET
        calendar_id=excluded.calendar_id, title=excluded.title, kind=excluded.kind,
-       at=excluded.at, end_at=excluded.end_at, done=excluded.done, color=excluded.color`;
+       at=excluded.at, end_at=excluded.end_at, done=excluded.done, color=excluded.color,
+       all_day=excluded.all_day`;
 
 async function write(conn: Database, item: DayItem): Promise<void> {
   const at = (item.kind === 'task' ? item.due : item.start)?.getTime();
@@ -76,7 +79,8 @@ async function write(conn: Database, item: DayItem): Promise<void> {
     at,
     item.end?.getTime() ?? null,
     item.done ? 1 : 0,
-    item.color ?? null
+    item.color ?? null,
+    item.allDay ? 1 : 0
   ]);
 }
 

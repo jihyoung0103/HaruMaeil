@@ -7,6 +7,8 @@ import {
   coversDay,
   layoutWeek,
   hiddenPerDay,
+  dayGroups,
+  HOLIDAY_CALENDAR,
   type DayItem
 } from './calendar.ts';
 
@@ -14,7 +16,16 @@ const ok = (cond: boolean, msg: string) => {
   if (!cond) throw new Error(msg);
 };
 const d = (y: number, m: number, day: number, h = 0, min = 0) => new Date(y, m - 1, day, h, min);
-const ev = (id: string, start: Date, end?: Date): DayItem => ({ id, title: id, kind: 'event', start, end, calendarId: 'c' });
+const ev = (id: string, start: Date, end?: Date, allDay = false): DayItem => ({
+  id,
+  title: id,
+  kind: 'event',
+  start,
+  end,
+  allDay,
+  calendarId: 'c'
+});
+const task = (id: string, due: Date, allDay: boolean): DayItem => ({ id, title: id, kind: 'task', due, allDay, calendarId: 't' });
 
 // ---- 격자 ----
 // 2026-09: 1일이 화요일 → 일요일 시작이면 앞에 일·월 두 칸이 8월
@@ -76,5 +87,37 @@ ok(by('lunch').lane === 1, '캡스톤과 겹치는 목요일 점심은 둘째 �
 
 const hidden = hiddenPerDay(bars, 1);
 ok(hidden.join() === '1,0,0,1,0,0,0', '한 줄만 보일 때 월·목에 하나씩 숨음');
+
+// ---- 사이드 패널 묶음 ----
+{
+  const sep17 = d(2026, 9, 17);
+  const holiday: DayItem = { ...ev('holiday', d(2026, 9, 17), undefined, true), calendarId: HOLIDAY_CALENDAR };
+  // 구글 종일 일정: 9/17 하루짜리의 end는 9/18 자정
+  const allDay17 = ev('allDay17', d(2026, 9, 17), d(2026, 9, 18), true);
+  const allDay18 = ev('allDay18', d(2026, 9, 18), d(2026, 9, 19), true);
+  // 구글 할 일: 00:00으로 와도 날짜만 유효
+  const dateTask = task('dateTask', d(2026, 9, 17), true);
+  const timedTask = task('timedTask', d(2026, 9, 17, 14), false);
+  const late = ev('late', d(2026, 9, 17, 19), d(2026, 9, 17, 20));
+  const early = ev('early', d(2026, 9, 17, 9), d(2026, 9, 17, 10));
+  // 자정에 시작하지만 시각이 있는 일정 — 종일로 오판하면 안 됨
+  const midnight = ev('midnight', d(2026, 9, 17, 0), d(2026, 9, 17, 1));
+  const overnight = ev('overnight', d(2026, 9, 16, 23), d(2026, 9, 17, 1));
+
+  const items = [late, dateTask, allDay18, holiday, timedTask, early, allDay17, midnight, overnight];
+  const g = dayGroups(items, sep17);
+  const ids = (xs: DayItem[]) => xs.map((x) => x.id).join();
+
+  ok(ids(g.holidays) === 'holiday', '공휴일 묶음');
+  ok(ids(g.allDay) === 'allDay17', '종일: 끝이 다음날 자정이어도 하루만, 다음날 일정은 안 들어옴');
+  ok(ids(g.tasks) === 'dateTask,timedTask', '할 일은 시각 유무 상관없이 전부');
+  ok(ids(g.timed) === 'overnight,midnight,early,timedTask,late', '시각 있는 것만 시작 시각 순');
+  ok(g.timed.includes(timedTask) && g.tasks.includes(timedTask), '시각 있는 할 일은 양쪽에 같은 객체');
+  ok(!g.timed.includes(dateTask), '00:00 할 일을 시각 있음으로 오판하지 않음');
+
+  const g18 = dayGroups(items, d(2026, 9, 18));
+  ok(ids(g18.allDay) === 'allDay18', '다음날에는 전날 종일 일정이 번지지 않음');
+  ok(g18.timed.length === 0 && g18.tasks.length === 0, '다음날 나머지 비어 있음');
+}
 
 console.log('ok');

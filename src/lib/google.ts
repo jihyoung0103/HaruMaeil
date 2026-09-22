@@ -72,6 +72,8 @@ export async function syncGoogle(from: Date, to: Date): Promise<{ events: number
         kind: 'event',
         start: parseWhen(r.start),
         end: r.end ? parseWhen(r.end) : undefined,
+        // start.dateTime 없이 start.date만 온 일정
+        allDay: r.allDay,
         calendarId: cal.calendar.id,
         color: r.color ?? undefined
       })
@@ -83,6 +85,8 @@ export async function syncGoogle(from: Date, to: Date): Promise<{ events: number
         kind: 'task',
         due: parseWhen(r.due),
         done: r.done,
+        // 구글 할 일 due는 00:00:00Z로 와도 날짜만 유효하다 — 시각 있음으로 보지 않는다
+        allDay: true,
         calendarId: r.list
       })
     )

@@ -23,6 +23,7 @@ export async function ensureHolidays(from: Date, to: Date): Promise<void> {
       title: r.name,
       kind: 'event',
       start: parseWhen(r.date),
+      allDay: true,
       calendarId: HOLIDAY_CALENDAR
     }));
     await replaceCalendars([CALENDAR], new Date(year, 0, 1), new Date(year, 11, 31), items);
